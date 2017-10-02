@@ -54,15 +54,19 @@ MVN=`check_command mvn` || exit 1
 
 # Functions
 do_jar () {
-    check_task do_recompile || do_recompile
-}
+    do_patch
+    local src_path="${SCRIPT_PATH}/work/src"
+    pushd "${src_path}" >/dev/null
 
-do_recompile () {
-    check_task do_patch || do_patch
+    ${MVN}
+
+    popd >/dev/null
+
+    echo ">> Build finished. Check ${src_path}/target directory for jar"
 }
 
 do_rebuild_patches() {
-    check_task do_patch || do_patch
+    do_patch
     local src_path="${SCRIPT_PATH}/work/src"
     pushd "${src_path}" >/dev/null
 
@@ -79,11 +83,10 @@ do_patch () {
     pushd "${src_path}" >/dev/null
 
     # Apply all patches
+    git reset --hard "$(git rev-list --max-parents=0 HEAD)"
     find "${SCRIPT_PATH}/patches" -mindepth 1 -maxdepth 1 -name "*.patch" -exec git am {} \;
 
     popd >/dev/null
-
-    touch "${SCRIPT_PATH}/.tasks/do_patch"
 }
 
 do_decompile () {
