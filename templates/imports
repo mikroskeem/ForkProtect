@@ -1,0 +1,11 @@
+## ForkProtect imports
+
+# Note: this file is moved to right directory by script
+src/main/resources/plugin.yml
+
+# Files copied by script
+pom.xml
+.gitignore
+
+# Files from jar
+src/main/java/net/coreprotect/CoreProtect.java

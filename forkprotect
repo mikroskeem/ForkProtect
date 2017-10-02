@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+
+set -e
+
+## Utility functions
+
+# Gets script path
+get_script_path () {
+    # https://stackoverflow.com/a/246128
+    SOURCE="${BASH_SOURCE[0]}"
+    while [ -h "$SOURCE" ]; do
+        DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+        SOURCE="$(readlink "$SOURCE")"
+        [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+    done
+    echo -n "$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+}
+SCRIPT_PATH="`get_script_path`"
+
+check_command () {
+    local cmd=`command -v ${1}`
+    if [ -z "${cmd}" ]; then
+        echo "Command '${1}' is missing. Please install it." >/dev/stderr
+        return 1
+    fi
+    echo -n "${cmd}"
+}
+
+check_task () {
+    local tasks_path="${SCRIPT_PATH}/.tasks"
+    mkdir -p "${tasks_path}"
+    [ -f "${tasks_path}/${1}" ]
+    return "${?}"
+}
+
+check_tool () {
+    local tools_path="${SCRIPT_PATH}/work/tools"
+    mkdir -p "${tools_path}"
+    [ -f "${tools_path}/${1}" ]
+    return $?
+}
+
+# Load constants
+source "${SCRIPT_PATH}/scripts/constants.sh"
+source "${SCRIPT_PATH}/scripts/utils.sh"
+
+# Set up tools
+GIT=`check_command git` || exit 1
+CURL=`check_command curl` || exit 1
+JAVA=`check_command java` || exit 1
+JAR=`check_command jar` || exit 1
+ASTYLE=`check_command astyle` || exit 1
+MVN=`check_command mvn` || exit 1
+
+# Functions
+do_jar () {
+    check_task do_recompile || do_recompile
+}
+
+do_recompile () {
+    check_task do_patch || do_patch
+}
+
+do_rebuild_patches() {
+    check_task do_patch || do_patch
+    local src_path="${SCRIPT_PATH}/work/src"
+    pushd "${src_path}" >/dev/null
+
+    test -d "${SCRIPT_PATH}/patches/" && \
+        find "${SCRIPT_PATH}/patches/" -mindepth 1 -maxdepth 1 -name "*.patch" -delete
+    git format-patch --no-stat -N -o "${SCRIPT_PATH}/patches" "$(git rev-list --max-parents=0 HEAD)"
+
+    popd >/dev/null
+}
+
+do_patch () {
+    check_task do_decompile || do_decompile
+    local src_path="${SCRIPT_PATH}/work/src"
+    pushd "${src_path}" >/dev/null
+
+    # Apply all patches
+    find "${SCRIPT_PATH}/patches" -mindepth 1 -maxdepth 1 -name "*.patch" -exec git am {} \;
+
+    popd >/dev/null
+
+    touch "${SCRIPT_PATH}/.tasks/do_patch"
+}
+
+do_decompile () {
+    check_task do_download || do_download
+
+    local src_path="${SCRIPT_PATH}/work/src"
+    local fernflower_path="${SCRIPT_PATH}/work/tools/fernflower.jar"
+    check_tool fernflower.jar || download_file "${FERNFLOWER_URL}" "${fernflower_path}"
+
+    # Execute fernflower
+    mkdir -p "${SCRIPT_PATH}/work/decompiled"
+    cmdline="${JAVA} -jar ${fernflower_path} -din=1 -dgs=1 -asc=1 -iec=1 -rsy=1 -rbr=1 -lit=0 -ind='    ' -ren=1 ${SCRIPT_PATH}/work/jars/coreprotect.jar ${SCRIPT_PATH}/work/decompiled"
+    echo "Executing fernflower: '${cmdline}'"
+    bash -c "${cmdline}"
+
+    # Unpack
+    mkdir -p "${src_path}"
+    pushd "${src_path}" >/dev/null
+
+    cmdline="${JAR} xvf ${SCRIPT_PATH}/work/decompiled/coreprotect.jar"
+    echo "Executing jar: '${cmdline}'"
+    bash -c "${cmdline}"
+
+    # Do astyle
+    cmdline="env ARTISTIC_STYLE_OPTIONS=\"${SCRIPT_PATH}/templates/astyle.cfg\" ${ASTYLE} --recursive '${src_path}/*.java'"
+    echo "Executing astyle: '${cmdline}'"
+    bash -c "${cmdline}"
+    find -name "*.java.orig" -delete
+
+    # Move files into right place, remove unneeded and copy needed files
+    mkdir -p "${src_path}/src/main/java"
+    mkdir -p "${src_path}/src/main/resources"
+
+    mv -v net "${src_path}/src/main/java"
+
+    mv -v META-INF/maven/net.coreprotect/CoreProtect/pom.xml pom.xml
+    rm -rf META-INF
+
+    sed -i 's/^version:.*/version: ${project.version}/' plugin.yml
+    mv -v *.yml "${src_path}/src/main/resources"
+
+    cp -v "${SCRIPT_PATH}/templates/gitignore" .gitignore
+    cp -v "${SCRIPT_PATH}/templates/pom.xml" pom.xml
+
+    # Initialize git
+    ${GIT} init
+
+    # Disable signing
+    local use_sign="$(${GIT} config commit.gpgsign)"
+    ${GIT} config commit.gpgsign false
+
+    # Import only specific files
+    cat "${SCRIPT_PATH}/templates/imports" | grep -v "^#" | while read _import; do
+        # This test skips empty lines
+        test -z "${_import}" || \
+            ${GIT} add "${_import}"
+    done
+
+    ${GIT} commit -m "Code import"
+    ${GIT} clean -df
+
+    # Enable signing, if it was enabled
+    [ "${use_sign}" = "true" ] && ${GIT} config commit.gpgsign true
+
+    popd >/dev/null
+
+    touch "${SCRIPT_PATH}/.tasks/do_decompile"
+}
+
+do_download () {
+    local coreprotect_path="${SCRIPT_PATH}/work/jars"
+    mkdir -p "${coreprotect_path}"
+
+    echo "Downloading CoreProtect jar..."
+    download_file "${COREPROTECT_URL}" "${coreprotect_path}/coreprotect.jar"
+
+    # Install to local Maven repository
+    mvn install:install-file -Dfile="${coreprotect_path}/coreprotect.jar" \
+        -DgroupId=eu.mikroskeem.forkprotect \
+        -DartifactId=coreprotect_raw \
+        -Dversion="${COREPROTECT_VERSION}" \
+        -Dpackaging=jar
+
+    touch "${SCRIPT_PATH}/.tasks/do_download"
+}
+
+do_cleanup () {
+    rm -rf "${SCRIPT_PATH}/.tasks"
+    rm -rf "${SCRIPT_PATH}/work/decompiled"
+    rm -rf "${SCRIPT_PATH}/work/tools"
+    rm -rf "${SCRIPT_PATH}/work/src"
+}
+
+do_help () {
+    cat <<EOF
+ForkProtect build tool
+
+Subcommands:
+* jar/j - Builds ForkProtect jar
+* patch/p - Applies patches to decompiled CoreProtect jar
+* decompile/dec - Decompiles CoreProtect jar
+* recompile/rec - Recompiles patched CoreProtect jar
+* rebuildpatches/reb - Rebuilds patches against modified CoreProtect repository
+* download/dl - Downloads original CoreProtect from Spiget
+* cleanup/c - Cleans everything up
+* help/h - Shows ForkProtect build tool help
+EOF
+}
+
+case ${1} in
+    jar|j)
+        do_jar
+        ;;
+    patch|p)
+        do_patch
+        ;;
+    decompile|dec)
+        do_decompile
+        ;;
+    recompile|rec)
+        do_recompile
+        ;;
+    rebuildpatches|reb)
+        do_rebuild_patches
+        ;;
+    download|dl)
+        do_download
+        ;;
+    cleanup|clean|c)
+        do_cleanup
+        ;;
+    help|h|*)
+        do_help
+        ;;
+esac

@@ -1,0 +1,22 @@
+From e9a136bd6f4050ef2ac2717f5809ab38e547f464 Mon Sep 17 00:00:00 2001
+From: Mark Vainomaa <mikroskeem@mikroskeem.eu>
+Date: Mon, 2 Oct 2017 14:48:18 +0300
+Subject: [PATCH] Set version
+
+
+diff --git a/pom.xml b/pom.xml
+index 41dd8a1..45bf269 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -6,7 +6,7 @@
+ 
+     <groupId>eu.mikroskeem</groupId>
+     <artifactId>forkprotect</artifactId>
+-    <version>PLEASE_EDIT_THE_VERSION</version>
++    <version>2.14.2</version>
+     <properties>
+         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+         <paper.version>1.12.2-R0.1-SNAPSHOT</paper.version>
+-- 
+2.14.2
+
